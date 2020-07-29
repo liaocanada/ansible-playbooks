@@ -1,0 +1,127 @@
+- name: Example app running on LAMP stack
+  hosts: target1
+  become: yes
+  become_user: root
+  tasks: 
+    # Begin
+    - name: Echo date
+      command: date
+      register: date
+    - debug: var=date.stdout_lines
+
+    # FirewallD
+    - name: Ensure FirewallD is installed
+      yum:
+        name: firewalld
+        state: present
+    - name: Ensure FirewallD is started
+      service:
+        name: firewalld
+        state: started
+    - name: Ensure FirewallD is enabled
+      service:
+        name: firewalld
+        enabled: yes
+
+    # MariaDB
+    - name: Ensure MariaDB is installed
+      yum:
+        name: mariadb-server
+        state: present
+    - name: Ensure MariaDB is started
+      service:
+        name: mariadb
+        state: started
+    - name: Ensure MariaDB is enabled
+      service:
+        name: mariadb
+        enabled: yes
+
+    # Configure firewall for database
+    - name: Add port 3306
+      # Will warn if already enabled
+      command: firewall-cmd --permanent --zone=public --add-port=3306/tcp
+    - name: Reload firewall
+      command: firewall-cmd --reload
+
+    # New: ensure pymysql is installed
+    - name: Ensure PyMySQL is installed on host
+      pip:
+        name: pymysql
+        state: present
+
+    # Configure and seed database
+    - name: Ensure 'ecomdb' database is created
+      register: db_creation
+      mysql_db:
+        name: ecomdb
+        state: present
+    - name: Ensure 'ecomuser' user is created with proper permissions
+      mysql_user:
+        name: ecomuser
+        password: ecompassword
+        priv: '*.*:ALL'
+        state: present
+    - name: Copy database dump file
+      copy:
+        src: ./db-load-script.sql
+        dest: /home/osboxes/ansible-test/
+    - name: Restore database (NOT IDEMPOTENT!)
+      when: db_creation.changed == true
+      mysql_db:
+        name: ecomdb
+        state: import
+        target: /home/osboxes/ansible-test/db-load-script.sql
+
+    # Install required packages for web server
+    - name: Ensure Apache, PHP, PHP-MySQL are installed
+      yum:
+        name:
+          - httpd
+          - php
+          - php-mysqlnd
+
+    # Configure firewall for web server
+    - name: Add port 80
+      # Will warn if already enabled
+      command: firewall-cmd --permanent --zone=public --add-port=80/tcp
+    - name: Reload firewall
+      command: firewall-cmd --reload
+
+    # Configure Apache
+    - name: Replace index.html with index.php in config file
+      replace:
+        path: /etc/httpd/conf/httpd.conf
+        regexp: 'index\.html'
+        replace: 'index.php'
+
+    # Start and enable Apache
+    - name: Ensure Apache is started
+      service:
+        name: httpd
+        state: started
+    - name: Ensure Apache is enabled
+      service:
+        name: httpd
+        enabled: yes
+
+    # Download app
+    - name: Ensure git is installed
+      yum:
+        name: git
+        state: present
+    - name: Ensure app is cloned from git
+      git: 
+        repo: https://github.com/kodekloudhub/learning-app-ecommerce.git
+        dest: /var/www/html/
+    
+    # Configure app
+    - name: Connect to the right database
+      replace:
+        path: /var/www/html/index.php
+        regexp: '172\.20\.1\.101'
+        replace: localhost
+
+    # Test app
+    - name: Curl localhost
+      uri: url=http://localhost
